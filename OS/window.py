@@ -185,12 +185,44 @@ class SigeonWindow(QFrame):
             new_pos = event.globalPosition().toPoint() - self.drag_position
             # Restrict window from going fully offscreen
             new_pos.setY(max(0, new_pos.y())) # don't drag above screen
+            
+            old_pos = self.pos()
             self.move(new_pos)
+            
+            dx = new_pos.x() - old_pos.x()
+            dy = new_pos.y() - old_pos.y()
+            
+            self.last_dx = dx
+            self.last_dy = dy
+            
+            if hasattr(self.desktop, 'stir_liquid_glass'):
+                self.desktop.stir_liquid_glass(new_pos.x() + self.width()/2, new_pos.y() + self.titlebar.height()/2, dx, dy)
+                
             event.accept()
 
     def titlebar_release(self, event: QMouseEvent):
         if self._is_dragging:
             self._is_dragging = False
+            
+            # Wobbly Jiggle effect on release if dragged fast
+            speed = 0
+            if hasattr(self, 'last_dx') and hasattr(self, 'last_dy'):
+                speed = (self.last_dx**2 + self.last_dy**2)**0.5
+                
+            if speed > 15:
+                from PyQt6.QtCore import QPropertyAnimation, QPoint, QEasingCurve
+                self.jiggle_anim = QPropertyAnimation(self, b"pos")
+                self.jiggle_anim.setDuration(600) # bouncy
+                
+                end_pos = self.pos()
+                # Pull the window slightly in the direction of velocity to create an elastic snap back
+                pull_pos = end_pos + QPoint(int(self.last_dx), int(self.last_dy))
+                
+                self.jiggle_anim.setStartValue(pull_pos)
+                self.jiggle_anim.setEndValue(end_pos)
+                self.jiggle_anim.setEasingCurve(QEasingCurve.Type.OutElastic)
+                self.jiggle_anim.start()
+                
             animations.fade_in(self, duration=150, start=0.75, end=1.0)
 
     def titlebar_double_click(self, event: QMouseEvent):

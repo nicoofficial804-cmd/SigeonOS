@@ -3,7 +3,7 @@ import random
 import json
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QPushButton, QLabel, QMessageBox, QGraphicsDropShadowEffect
 from PyQt6.QtCore import Qt, QRect, QPoint, QPointF, QSize, QTimer
-from PyQt6.QtGui import QPainter, QPixmap, QColor, QBrush, QLinearGradient, QMouseEvent
+from PyQt6.QtGui import QPainter, QPixmap, QColor, QBrush, QLinearGradient, QRadialGradient, QPen, QMouseEvent
 import theme
 from window import SigeonWindow
 from start_menu import SigeonStartMenu
@@ -19,6 +19,10 @@ from apps.weather import SigeonWeather
 from apps.photos import SigeonPhotos
 from apps.flappy import FlappyPigeonGame
 from apps.tty import SigeonTTY
+from apps.browser import SigeonBrowser
+from apps.sigeon_ai import SigeonAIApp
+from apps.calendar_app import SigeonCalendarApp
+from apps.liquid_glass import SigeonLiquidGlassWidget
 from apps.fs import VirtualFile
 
 class DesktopIcon(QWidget):
@@ -110,7 +114,8 @@ class SigeonDesktop(QWidget):
         # Window Manager state
         self.open_windows = {} # app_id -> SigeonWindow
         self.stagger_count = 0
-        self.wallpaper_type = "wallpaper" # wallpaper, dark, pink, green, orange
+        self.wallpaper_type = "wallpaper.png" # default to original wallpaper
+        self.liquid_glass_enabled = True # active by default!
         
         # Load wallpaper pixmap
         self.wallpaper_pixmap = None
@@ -119,6 +124,22 @@ class SigeonDesktop(QWidget):
             self.wallpaper_pixmap = QPixmap(wp_path)
             
         self.icon_widgets = []
+        self.liquid_glass_widget = None
+        
+        # Liquid Glass Wallpaper State
+        self.liquid_blobs = []
+        self.wallpaper_timer = QTimer(self)
+        self.wallpaper_timer.timeout.connect(self.animate_wallpaper)
+        self.init_liquid_blobs()
+        
+        self._cached_background = None
+        self._cached_overlay = None
+        self._caches_dirty = True
+        
+        if self.liquid_glass_enabled:
+            self.wallpaper_timer.start(10) # Ultra Performance Mode (~100 FPS)
+            
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.init_ui()
 
     def init_ui(self):
@@ -134,6 +155,8 @@ class SigeonDesktop(QWidget):
         system_icons = [
             ("Pigeon", "logo", "about", False, None),
             ("Files", "folder", "explorer", False, None),
+            ("SigeonAI", "logo_white", "sigeon_ai", False, None),
+            ("Browser", "wing_drive", "browser", False, None),
             ("Paint", "photos", "paint", False, None),
             ("Flappy Pigeon", "logo", "flappy_game", False, None),
             ("Settings", "settings", "settings", False, None),
@@ -186,6 +209,12 @@ class SigeonDesktop(QWidget):
                     
             icon_w.show()
             self.icon_widgets.append(icon_w)
+            
+        # Instantiate and show Liquid Glass floating widget
+        if self.liquid_glass_widget is None:
+            self.liquid_glass_widget = SigeonLiquidGlassWidget(self)
+        self.reposition_glass_widget()
+        self.liquid_glass_widget.show()
 
     def save_icon_positions(self):
         if not self.main_window or not self.main_window.fs.current_user:
@@ -217,37 +246,229 @@ class SigeonDesktop(QWidget):
         wp_path = os.path.join(os.path.dirname(__file__), "assets", "wallpapers", wp_type)
         if os.path.exists(wp_path):
             self.wallpaper_pixmap = QPixmap(wp_path)
-        
+        elif wp_type == "wallpaper.png":
+            wp_path = os.path.join(os.path.dirname(__file__), "assets", "wallpaper.png")
+            if os.path.exists(wp_path):
+                self.wallpaper_pixmap = QPixmap(wp_path)
+            
+        self._caches_dirty = True
         self.update()
 
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    def set_liquid_glass_enabled(self, enabled):
+        self.liquid_glass_enabled = enabled
+        self._caches_dirty = True
+        if enabled:
+            if not self.wallpaper_timer.isActive():
+                self.wallpaper_timer.start(10)
+        else:
+            self.wallpaper_timer.stop()
+        self.update()
+
+    def init_liquid_blobs(self):
+        colors = [
+            (QColor("#FF2A54"), QColor("rgba(255, 42, 84, 0)")),    # Deep Pink/Red
+            (QColor("#00F2FE"), QColor("rgba(0, 242, 254, 0)")),    # Cyan
+            (QColor("#7000FF"), QColor("rgba(112, 0, 255, 0)")),    # Violet
+            (QColor("#FF9A00"), QColor("rgba(255, 154, 0, 0)")),    # Orange
+            (QColor("#05DFD7"), QColor("rgba(5, 223, 215, 0)")),    # Teal
+            (QColor("#D600FF"), QColor("rgba(214, 0, 255, 0)")),    # Magenta
+        ]
+        import math
+        import random
+        self.liquid_blobs = []
+        for i, (c_start, c_end) in enumerate(colors):
+            radius = random.uniform(600, 900)
+            x = random.uniform(-100, 1920 + 100)
+            y = random.uniform(-100, 1080 + 100)
+            speed = random.uniform(1.0, 2.0)
+            angle = random.uniform(0, 2 * math.pi)
+            
+            self.liquid_blobs.append({
+                'x': x,
+                'y': y,
+                'radius': radius,
+                'c_start': c_start,
+                'c_end': c_end,
+                'dx': math.cos(angle) * speed,
+                'dy': math.sin(angle) * speed
+            })
+
+    def play_jingle(self):
+        from PyQt6.QtMultimedia import QSoundEffect
+        from PyQt6.QtCore import QUrl
+        import os
+        if not hasattr(self, 'jingle_player'):
+            self.jingle_player = QSoundEffect()
+            sound_path = os.path.join(os.path.dirname(__file__), "assets", "boot.mp3")
+            if os.path.exists(sound_path):
+                self.jingle_player.setSource(QUrl.fromLocalFile(sound_path))
+                self.jingle_player.setVolume(0.8)
+        self.jingle_player.play()
+
+    def stir_liquid_glass(self, x, y, dx, dy):
+        if not self.liquid_glass_enabled:
+            return
+            
+        speed = (dx**2 + dy**2)**0.5
+        if speed < 2:
+            return
+            
+        import time, random
+        # Play Jingle sound if shaken really hard!
+        if speed > 40:
+            now = time.time()
+            if not hasattr(self, "last_jingle_time"):
+                self.last_jingle_time = 0
+            if now - self.last_jingle_time > 0.4:
+                self.last_jingle_time = now
+                self.play_jingle()
+
+        # Massively accelerate liquid blobs
+        for b in self.liquid_blobs:
+            dist = max(1, ((b['x'] - x)**2 + (b['y'] - y)**2)**0.5)
+            force = (8000 / dist) * (speed / 10.0)
+            if force > 60: force = 60
+            
+            b['dx'] += (dx / speed) * force
+            b['dy'] += (dy / speed) * force
+            
+            # Friction / Max speed clamp
+            bspeed = (b['dx']**2 + b['dy']**2)**0.5
+            if bspeed > 45:
+                b['dx'] = (b['dx']/bspeed) * 45
+                b['dy'] = (b['dy']/bspeed) * 45
+
+        # Create Splash Ripples
+        if not hasattr(self, 'ripples'):
+            self.ripples = []
+            
+        if random.random() < 0.5 and speed > 10:
+            self.ripples.append({
+                'x': x + random.randint(-40, 40),
+                'y': y + random.randint(-40, 40),
+                'radius': 10.0,
+                'max_radius': random.uniform(150, 500),
+                'alpha': 255.0,
+                'color': random.choice([b['c_start'] for b in self.liquid_blobs])
+            })
+
+    def animate_wallpaper(self):
+        if not self.liquid_glass_enabled:
+            self.wallpaper_timer.stop()
+            return
+            
+        w = self.width() if self.width() > 0 else 1920
+        h = self.height() if self.height() > 0 else 1080
         
-        w = float(self.width())
-        h = float(self.height())
+        # We bounce the centers, not the edges, since blobs are huge ambient lights
+        padding = 300 
+        for b in self.liquid_blobs:
+            b['x'] += b['dx']
+            b['y'] += b['dy']
+            
+            if b['x'] < -padding:
+                b['x'] = -padding
+                b['dx'] = abs(b['dx'])
+            elif b['x'] > w + padding:
+                b['x'] = w + padding
+                b['dx'] = -abs(b['dx'])
+                
+            if b['y'] < -padding:
+                b['y'] = -padding
+                b['dy'] = abs(b['dy'])
+            elif b['y'] > h + padding:
+                b['y'] = h + padding
+                b['dy'] = -abs(b['dy'])
+                
+        # Animate ripples
+        if hasattr(self, 'ripples'):
+            for r in self.ripples[:]:
+                r['radius'] += 18.0 # fast expansion
+                r['alpha'] -= 7.0 # fade out
+                if r['alpha'] <= 0 or r['radius'] >= r['max_radius']:
+                    self.ripples.remove(r)
+                    
+        # Add friction to blobs so they slow down after stirring
+        for b in self.liquid_blobs:
+            b['dx'] *= 0.98
+            b['dy'] *= 0.98
+            
+            # ensure minimum speed so they don't stop entirely
+            bspeed = (b['dx']**2 + b['dy']**2)**0.5
+            if bspeed < 1.2 and bspeed > 0:
+                b['dx'] = (b['dx']/bspeed) * 1.2
+                b['dy'] = (b['dy']/bspeed) * 1.2
+
+        self.update()
+
+    def reposition_glass_widget(self):
+        if self.liquid_glass_widget:
+            w = self.width() if self.width() > 0 else 1920
+            widget_w = self.liquid_glass_widget.width()
+            self.liquid_glass_widget.move(w - widget_w - 40, 40)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.reposition_glass_widget()
+        self._caches_dirty = True
+        if self.liquid_glass_enabled and not self.wallpaper_timer.isActive():
+            self.wallpaper_timer.start(10)
+
+    def _build_caches(self, w, h):
+        self._cached_background = QPixmap(int(w), int(h))
+        self._cached_background.fill(Qt.GlobalColor.transparent)
+        p_bg = QPainter(self._cached_background)
+        p_bg.setRenderHint(QPainter.RenderHint.Antialiasing)
+        self._draw_wallpaper(p_bg, w, h)
+        if self.liquid_glass_enabled:
+            p_bg.setBrush(QBrush(QColor(10, 15, 25, 190)))
+            p_bg.setPen(Qt.PenStyle.NoPen)
+            p_bg.drawRect(0, 0, int(w), int(h))
+        p_bg.end()
         
+        self._cached_overlay = QPixmap(int(w), int(h))
+        self._cached_overlay.fill(Qt.GlobalColor.transparent)
+        if self.liquid_glass_enabled:
+            p_ov = QPainter(self._cached_overlay)
+            p_ov.setRenderHint(QPainter.RenderHint.Antialiasing)
+            
+            p_ov.setBrush(QBrush(QColor(255, 255, 255, 10)))
+            p_ov.setPen(Qt.PenStyle.NoPen)
+            p_ov.drawRect(0, 0, int(w), int(h))
+            
+            glass_pen = QPen(QColor(255, 255, 255, 30), 1.5)
+            p_ov.setPen(glass_pen)
+            p_ov.drawLine(0, 0, int(w), int(h))
+            p_ov.drawLine(0, int(h * 0.3), int(w * 0.7), int(h))
+            p_ov.drawLine(int(w * 0.3), 0, int(w), int(h * 0.7))
+            
+            dot_pen = QPen(QColor(255, 255, 255, 20), 1.5)
+            p_ov.setPen(dot_pen)
+            grid_spacing = 30
+            for x in range(0, int(w), grid_spacing):
+                for y in range(0, int(h), grid_spacing):
+                    p_ov.drawPoint(x, y)
+            p_ov.end()
+
+    def _draw_wallpaper(self, painter, w, h):
         if self.wallpaper_type.lower().endswith(('.png', '.jpg', '.jpeg')) and self.wallpaper_pixmap:
-            # Draw our beautiful generated wallpaper scaled to fit
             scaled_pixmap = self.wallpaper_pixmap.scaled(self.size(), Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation)
-            # Center it
-            px = (self.width() - scaled_pixmap.width()) // 2
-            py = (self.height() - scaled_pixmap.height()) // 2
+            px = (int(w) - scaled_pixmap.width()) // 2
+            py = (int(h) - scaled_pixmap.height()) // 2
             painter.drawPixmap(px, py, scaled_pixmap)
         elif self.wallpaper_type == "wallpaper" and self.wallpaper_pixmap:
-            # Fallback legacy check
             scaled_pixmap = self.wallpaper_pixmap.scaled(self.size(), Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation)
-            px = (self.width() - scaled_pixmap.width()) // 2
-            py = (self.height() - scaled_pixmap.height()) // 2
+            px = (int(w) - scaled_pixmap.width()) // 2
+            py = (int(h) - scaled_pixmap.height()) // 2
             painter.drawPixmap(px, py, scaled_pixmap)
         else:
-            # Draw fallback gradients/colors
             color_map = {
                 "dark": (QColor("#1a1e29"), QColor("#0d1017")),
                 "pink": (QColor("#f8a5c2"), QColor("#f78fb3")),
                 "green": (QColor("#2ecc71"), QColor("#27ae60")),
                 "orange": (QColor("#e67e22"), QColor("#d35400")),
-                "wallpaper": (QColor("#3eaefc"), QColor("#005fa3")) # fallback sky blue
+                "black": (QColor("#000000"), QColor("#050505")),
+                "wallpaper": (QColor("#3eaefc"), QColor("#005fa3"))
             }
             
             c1, c2 = color_map.get(self.wallpaper_type, color_map["wallpaper"])
@@ -257,20 +478,69 @@ class SigeonDesktop(QWidget):
             
             painter.setBrush(QBrush(grad))
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.drawRect(0, 0, self.width(), self.height())
+            painter.drawRect(0, 0, int(w), int(h))
             
-            # Draw central transparent glowing pigeon logo outline for aesthetics!
-            painter.setBrush(QBrush(QColor("rgba(255, 255, 255, 0.08)")))
-            painter.drawEllipse(QPointF(w/2, h/2), h*0.35, h*0.35)
+            if self.wallpaper_type != "black":
+                painter.setBrush(QBrush(QColor("rgba(255, 255, 255, 0.08)")))
+                painter.drawEllipse(QPointF(w/2, h/2), h*0.35, h*0.35)
+                
+                path = theme.QPainterPath()
+                cx = w/2 - 40
+                cy = h/2 - 40
+                path.moveTo(cx, cy + 40)
+                path.cubicTo(cx + 20, cy, cx + 60, cy + 10, cx + 80, cy + 40)
+                path.cubicTo(cx + 60, cy + 60, cx + 30, cy + 60, cx, cy + 40)
+                painter.drawPath(path)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        
+        w = float(self.width())
+        h = float(self.height())
+        
+        if w <= 0 or h <= 0:
+            return
             
-            # Stylized wing outline
-            path = theme.QPainterPath()
-            cx = w/2 - 40
-            cy = h/2 - 40
-            path.moveTo(cx, cy + 40)
-            path.cubicTo(cx + 20, cy, cx + 60, cy + 10, cx + 80, cy + 40)
-            path.cubicTo(cx + 60, cy + 60, cx + 30, cy + 60, cx, cy + 40)
-            painter.drawPath(path)
+        if getattr(self, '_caches_dirty', True) or self._cached_background is None or self._cached_overlay is None or self._cached_background.size() != self.size():
+            self._build_caches(w, h)
+            self._caches_dirty = False
+            
+        # 1. Draw base background cache
+        painter.drawPixmap(0, 0, self._cached_background)
+        
+        # 2. Draw Liquid Glass Overlay dynamic elements if enabled
+        if self.liquid_glass_enabled:
+            # Draw animated vibrant liquid blobs using Screen mode for light-like mixing
+            painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Screen)
+            for b in self.liquid_blobs:
+                grad = QRadialGradient(b['x'], b['y'], b['radius'], b['x'], b['y'])
+                grad.setColorAt(0.0, b['c_start'])
+                grad.setColorAt(0.3, QColor(b['c_start'].red(), b['c_start'].green(), b['c_start'].blue(), 200))
+                grad.setColorAt(1.0, b['c_end'])
+                
+                painter.setBrush(QBrush(grad))
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.drawEllipse(QPointF(b['x'], b['y']), b['radius'], b['radius'])
+                
+            # Draw splash ripples
+            if hasattr(self, 'ripples'):
+                for r in self.ripples:
+                    grad = QRadialGradient(r['x'], r['y'], r['radius'], r['x'], r['y'])
+                    # vibrant ripple center
+                    alpha_val = int(max(0, min(255, r['alpha'] * 0.4)))
+                    grad.setColorAt(0.0, QColor(r['color'].red(), r['color'].green(), r['color'].blue(), 0))
+                    grad.setColorAt(0.7, QColor(r['color'].red(), r['color'].green(), r['color'].blue(), alpha_val))
+                    grad.setColorAt(1.0, QColor(r['color'].red(), r['color'].green(), r['color'].blue(), 0))
+                    
+                    painter.setBrush(QBrush(grad))
+                    painter.setPen(Qt.PenStyle.NoPen)
+                    painter.drawEllipse(QPointF(r['x'], r['y']), r['radius'], r['radius'])
+                
+            painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
+            
+            # 3. Draw Top Frosted Glass shine reflections cache
+            painter.drawPixmap(0, 0, self._cached_overlay)
 
     # App Open Orchestration
     def open_app(self, app_id, argument=None):
@@ -358,6 +628,24 @@ class SigeonDesktop(QWidget):
             icon_name = "logo"
             content_widget = FlappyPigeonGame(self)
             width, height = 400, 340
+
+        elif app_id == "browser":
+            title = "Feather Browser"
+            icon_name = "wing_drive"
+            content_widget = SigeonBrowser(self)
+            width, height = 900, 620
+
+        elif app_id == "sigeon_ai":
+            title = "SigeonAI"
+            icon_name = "logo_white"
+            content_widget = SigeonAIApp(self)
+            width, height = 960, 660
+
+        elif app_id == "calendar":
+            title = "Calendar"
+            icon_name = "settings"
+            content_widget = SigeonCalendarApp(self)
+            width, height = 680, 420
             
         elif app_id == "about":
             # Shows settings app with row activated to the last spec page
@@ -425,6 +713,36 @@ class SigeonDesktop(QWidget):
         else:
             QMessageBox.information(self, "Sigeon File Manager", f"Opening file: {filename}\n\nDescription:\n{file_obj.content}")
 
+    def open_real_file(self, abs_path):
+        """Open a real host OS file using the system default app, or in Notepad if text."""
+        import subprocess, sys as _sys
+        ext = abs_path.rsplit(".", 1)[-1].lower() if "." in abs_path else ""
+        if ext in ("txt", "py", "md", "log", "cfg", "ini", "json", "yaml", "yml", "sh", "bat", "xml", "csv"):
+            try:
+                with open(abs_path, 'r', encoding='utf-8', errors='replace') as f:
+                    content = f.read()
+                vfile = VirtualFile(
+                    name=abs_path.rsplit("\\", 1)[-1].rsplit("/", 1)[-1],
+                    file_type=ext,
+                    content=content,
+                    location=abs_path,
+                    date=""
+                )
+                self.open_app("notepad", vfile)
+                return
+            except Exception:
+                pass
+        try:
+            import os as _os
+            if _sys.platform == "win32":
+                _os.startfile(abs_path)
+            elif _sys.platform == "darwin":
+                subprocess.Popen(["open", abs_path])
+            else:
+                subprocess.Popen(["xdg-open", abs_path])
+        except Exception:
+            pass
+
     # Window Manager Events
     def window_closed(self, app_id):
         if app_id in self.open_windows:
@@ -455,3 +773,29 @@ class SigeonDesktop(QWidget):
             if app_id == "explorer":
                 explorer_widget = win.content_container.layout().itemAt(0).widget()
                 explorer_widget.refresh_view()
+
+    def mousePressEvent(self, event):
+        self.setFocus()
+        super().mousePressEvent(event)
+
+    def keyPressEvent(self, event):
+        import time
+        key_text = event.text().upper()
+        if key_text:
+            now = time.time()
+            if not hasattr(self, 'last_key_time'):
+                self.last_key_time = 0
+                self.crash_buffer = ""
+            
+            # Reset buffer if more than 5 seconds passed
+            if now - self.last_key_time > 5.0:
+                self.crash_buffer = ""
+                
+            self.last_key_time = now
+            self.crash_buffer += key_text
+            self.crash_buffer = self.crash_buffer[-8:]
+            
+            if self.crash_buffer == "123CRASH":
+                self.crash_buffer = ""
+                raise RuntimeError("Manual crash triggered by user sequence (1+2+3+C+R+A+S+H)")
+        super().keyPressEvent(event)

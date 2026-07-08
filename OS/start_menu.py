@@ -79,6 +79,7 @@ class SigeonStartMenu(QWidget):
             ("Notes", "notepad", "notepad"),
             ("Settings", "settings", "settings"),
             ("Terminal", "terminal", "terminal"),
+            ("Calendar", "settings", "calendar"),
             ("Flappy Bird", "logo", "flappy_game")
         ]
 

@@ -2,7 +2,7 @@
 # This script runs the Arch Linux container in privileged mode to build the ISO.
 
 $sigeonPath = $PSScriptRoot
-Write-Host "Starting ..." -ForegroundColor Cyan
+Write-Host "Starting Custom Arch Linux ISO build..." -ForegroundColor Cyan
 Write-Host "Workspace: $sigeonPath" -ForegroundColor Gray
 
 # Ensure Docker is running

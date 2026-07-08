@@ -1,4 +1,7 @@
 import sys
+import os
+import shutil
+import datetime
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, 
                              QLineEdit, QListWidget, QListWidgetItem, QTableWidget, 
                              QTableWidgetItem, QSplitter, QHeaderView, QGridLayout, QScrollArea)
@@ -16,6 +19,9 @@ class SigeonExplorer(QWidget):
         self.desktop = desktop_parent
         self.fs = VirtualFS()
         self.current_directory = ["Home"]
+        # When browsing real OS paths, this holds the absolute path string
+        self.real_path: str | None = None
+        self._real_path_history: list[str] = []
         
         self.init_ui()
         self.navigate_to(["Home"])
@@ -27,8 +33,8 @@ class SigeonExplorer(QWidget):
         
         # 1. Navigation / Address Bar
         self.nav_bar = QWidget(self)
+        self.nav_bar.setObjectName("explorer_nav_bar")
         self.nav_bar.setFixedHeight(40)
-        self.nav_bar.setStyleSheet("background-color: #ffffff; border-bottom: 1px solid rgba(0, 0, 0, 0.08);")
         
         self.nav_layout = QHBoxLayout(self.nav_bar)
         self.nav_layout.setContentsMargins(8, 0, 8, 0)
@@ -105,17 +111,18 @@ class SigeonExplorer(QWidget):
             bitmask = ctypes.windll.kernel32.GetLogicalDrives()
             for letter in string.ascii_uppercase:
                 if bitmask & 1:
-                    self.add_sidebar_item(f"  {letter}:\\", "wing_drive", [f"{letter}:\\"])
+                    drive = f"{letter}:\\"
+                    self.add_sidebar_item(f"  {drive}", "wing_drive", ["REAL:", drive])
                 bitmask >>= 1
         else:
-            self.add_sidebar_item("  Root (/)", "wing_drive", ["/"])
+            self.add_sidebar_item("  Root (/)", "wing_drive", ["REAL:", "/"])
             
         self.sidebar_layout.addWidget(self.sidebar_list)
         self.splitter.addWidget(self.sidebar)
         
         # Right File/Folder area
         self.right_panel = QWidget(self)
-        self.right_panel.setStyleSheet("background-color: #ffffff;")
+        self.right_panel.setObjectName("explorer_right_panel")
         self.right_layout = QVBoxLayout(self.right_panel)
         self.right_layout.setContentsMargins(16, 12, 16, 12)
         self.right_layout.setSpacing(14)
@@ -153,8 +160,8 @@ class SigeonExplorer(QWidget):
         
         # 3. Footer Status Bar
         self.status_bar = QWidget(self)
+        self.status_bar.setObjectName("explorer_status_bar")
         self.status_bar.setFixedHeight(24)
-        self.status_bar.setStyleSheet("background-color: #f3f3f3; border-top: 1px solid rgba(0,0,0,0.06);")
         self.status_layout = QHBoxLayout(self.status_bar)
         self.status_layout.setContentsMargins(12, 0, 12, 0)
         
@@ -195,15 +202,19 @@ class SigeonExplorer(QWidget):
         
         if path_list == ["Recent"]:
             self.show_recent_only()
+        elif isinstance(path_list, list) and len(path_list) == 2 and path_list[0] == "REAL:":
+            self.navigate_real(path_list[1])
         else:
             self.navigate_to(path_list)
 
     # Navigation Methods
     def navigate_to(self, path_list):
+        """Navigate within the virtual SigeonOS filesystem."""
         if path_list == ["Recent"]:
             self.show_recent_only()
             return
-            
+
+        self.real_path = None  # leave real-fs mode
         node = self.fs.get_node(path_list)
         if node is None:
             return
@@ -225,7 +236,33 @@ class SigeonExplorer(QWidget):
             ("#555;" if self.btn_back.isEnabled() else "#ccc;")
         )
 
+    def navigate_real(self, abs_path: str):
+        """Navigate to a real OS filesystem path."""
+        if not os.path.isdir(abs_path):
+            return
+        if self.real_path:
+            self._real_path_history.append(self.real_path)
+        self.real_path = abs_path
+        self.current_directory = []
+        self.search_input.clear()
+        self.address_input.setText(abs_path)
+        self.refresh_real_view()
+        self.btn_back.setEnabled(bool(self._real_path_history))
+        self.btn_back.setStyleSheet(
+            "background: transparent; border: none; border-radius: 4px; font-size: 14px; color: " +
+            ("#555;" if self.btn_back.isEnabled() else "#ccc;")
+        )
+
     def go_back(self):
+        if self.real_path:
+            if self._real_path_history:
+                prev = self._real_path_history.pop()
+                self.real_path = None  # reset so navigate_real doesn't re-push
+                self.navigate_real(prev)
+            else:
+                self.real_path = None
+                self.navigate_to(["Home"])
+            return
         if len(self.current_directory) > 1:
             self.navigate_to(self.current_directory[:-1])
         elif self.current_directory != ["Home"]:
@@ -234,8 +271,74 @@ class SigeonExplorer(QWidget):
     def go_up(self):
         self.go_back()
 
+    def refresh_real_view(self):
+        """Populate the file table with real OS directory contents."""
+        if not self.real_path:
+            return
+        self.recent_title.setVisible(False)
+        self.recent_table.setRowCount(0)
+        self.recent_table.setHorizontalHeaderLabels(["Name", "Size", "Date modified"])
+
+        try:
+            entries = list(os.scandir(self.real_path))
+        except PermissionError:
+            self.status_label.setText("Access denied")
+            return
+
+        dirs = sorted([e for e in entries if e.is_dir(follow_symlinks=False)], key=lambda e: e.name.lower())
+        files = sorted([e for e in entries if e.is_file(follow_symlinks=False)], key=lambda e: e.name.lower())
+
+        ext_icon_map = {
+            "txt": "file_txt", "py": "file_txt", "md": "file_txt",
+            "pdf": "file_pdf",
+            "png": "file_png", "jpg": "file_png", "jpeg": "file_png", "bmp": "file_png", "gif": "file_png",
+            "mp3": "file_mp3", "wav": "file_mp3", "flac": "file_mp3", "ogg": "file_mp3",
+        }
+
+        row = 0
+        for entry in dirs + files:
+            self.recent_table.insertRow(row)
+            is_dir = entry.is_dir(follow_symlinks=False)
+            ext = entry.name.rsplit(".", 1)[-1].lower() if "." in entry.name and not is_dir else ""
+            icon_name = "folder" if is_dir else ext_icon_map.get(ext, "file_generic")
+
+            item_name = QTableWidgetItem(entry.name)
+            item_name.setIcon(theme.IconFactory.get_icon(icon_name, 20))
+            # Store the full real path so double-click can navigate
+            item_name.setData(Qt.ItemDataRole.UserRole, ("REAL_DIR" if is_dir else "REAL_FILE", entry.path))
+            self.recent_table.setItem(row, 0, item_name)
+
+            if is_dir:
+                self.recent_table.setItem(row, 1, QTableWidgetItem("Folder"))
+            else:
+                try:
+                    size = entry.stat().st_size
+                    size_str = f"{size:,} B" if size < 1024 else (f"{size//1024:,} KB" if size < 1024**2 else f"{size//1024**2:,} MB")
+                except Exception:
+                    size_str = ""
+                self.recent_table.setItem(row, 1, QTableWidgetItem(size_str))
+
+            try:
+                mtime = datetime.datetime.fromtimestamp(entry.stat().st_mtime)
+                date_str = mtime.strftime("%d/%m/%Y %H:%M")
+            except Exception:
+                date_str = ""
+            self.recent_table.setItem(row, 2, QTableWidgetItem(date_str))
+            row += 1
+
+        total = len(dirs) + len(files)
+        try:
+            total_b, used_b, free_b = shutil.disk_usage(self.real_path)
+            self.storage_label.setText(f"{free_b//1024**3:.1f} GB free of {total_b//1024**3:.1f} GB")
+        except Exception:
+            self.storage_label.setText("")
+        self.status_label.setText(f"{total} items")
+
     def refresh_view(self):
-                # Retrieve current node and separate folders/files
+        if self.real_path:
+            self.refresh_real_view()
+            return
+        # Retrieve current node and separate folders/files
         node = self.fs.get_node(self.current_directory)
         folders = []
         files = []
@@ -316,7 +419,7 @@ class SigeonExplorer(QWidget):
     def show_recent_only(self):
         self.current_directory = ["Recent"]
         self.address_input.setText("Pigeon > Recent Files")
-        self.folders_container.setVisible(False)
+        self.recent_container.setVisible(False)
         self.recent_title.setText("Recent files")
         self.recent_title.setVisible(True)
         
@@ -352,6 +455,29 @@ class SigeonExplorer(QWidget):
         item = self.recent_table.item(row, 0)
         if item:
             file_obj = item.data(Qt.ItemDataRole.UserRole)
+            # Real OS filesystem entries
+            if isinstance(file_obj, tuple) and len(file_obj) == 2:
+                kind, path = file_obj
+                if kind == "REAL_DIR":
+                    self.navigate_real(path)
+                    return
+                elif kind == "REAL_FILE":
+                    # Open real file via desktop if we have a parent desktop reference
+                    if self.desktop and hasattr(self.desktop, 'open_real_file'):
+                        self.desktop.open_real_file(path)
+                    else:
+                        import subprocess, sys
+                        try:
+                            if sys.platform == 'win32':
+                                os.startfile(path)
+                            elif sys.platform == 'darwin':
+                                subprocess.Popen(['open', path])
+                            else:
+                                subprocess.Popen(['xdg-open', path])
+                        except Exception:
+                            pass
+                    return
+            # Virtual FS
             if isinstance(file_obj, VirtualFile):
                 self.open_file_requested.emit(file_obj.name, file_obj)
             elif isinstance(file_obj, str) and file_obj.startswith("FOLDER:"):
@@ -370,7 +496,7 @@ class SigeonExplorer(QWidget):
             return
             
         # Hide folders for search results
-        self.folders_container.setVisible(False)
+        self.recent_container.setVisible(False)
         self.recent_table.setRowCount(0)
         
         row = 0

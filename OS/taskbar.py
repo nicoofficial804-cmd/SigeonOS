@@ -62,6 +62,7 @@ class SigeonTaskbar(QFrame):
         # List of pinned apps
         self.pinned_apps = [
             ("explorer", "folder"),
+            ("sigeon_ai", "logo_white"),
             ("paint", "photos"),
             ("flappy_game", "logo"),
             ("calendar", "calendar"),

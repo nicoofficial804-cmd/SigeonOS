@@ -208,8 +208,8 @@ class SigeonNotepad(QWidget):
 
         # Toolbar
         self.toolbar = QWidget(self)
+        self.toolbar.setObjectName("explorer_nav_bar")
         self.toolbar.setFixedHeight(34)
-        self.toolbar.setStyleSheet("background-color: #f1f2f6; border-bottom: 1px solid rgba(0,0,0,0.06);")
 
         self.tb_layout = QHBoxLayout(self.toolbar)
         self.tb_layout.setContentsMargins(8, 0, 8, 0)
@@ -242,8 +242,7 @@ class SigeonNotepad(QWidget):
         self.editor.setPlaceholderText("Write your notes here... Coo!")
         self.layout.addWidget(self.editor)
 
-        # Styling
-        self.setStyleSheet(theme.get_stylesheet())
+        # Don't override the global stylesheet; just ensure the editor objectName is set.
 
     def load_file(self, file_obj):
         self.file_obj = file_obj

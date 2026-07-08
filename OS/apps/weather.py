@@ -71,7 +71,7 @@ class SigeonWeather(QWidget):
         
         for day, temp, icon, state in forecasts:
             card = QFrame()
-            card.setStyleSheet("background-color: #ffffff; border: 1px solid rgba(0,0,0,0.04); border-radius: 6px; padding: 6px;")
+            card.setObjectName("settings_card")
             lay = QVBoxLayout(card)
             lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
             lay.setSpacing(2)
@@ -93,11 +93,10 @@ class SigeonWeather(QWidget):
             self.forecast_row.addWidget(card)
             
         self.layout.addLayout(self.forecast_row)
-        self.setStyleSheet(theme.get_stylesheet())
 
     def add_stat_card(self, title, val, desc):
         card = QFrame(self)
-        card.setStyleSheet("background-color: #f7fafc; border: 1px solid rgba(0,0,0,0.04); border-radius: 6px; padding: 8px;")
+        card.setObjectName("settings_card")
         lay = QVBoxLayout(card)
         lay.setSpacing(1)
         

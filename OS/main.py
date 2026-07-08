@@ -2,9 +2,40 @@ import sys
 import os
 from PyQt6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QWidget, QMessageBox, QStackedWidget
 from PyQt6.QtCore import Qt, QPoint, QEvent, QRect
-from PyQt6.QtGui import QIcon, QMouseEvent
+from PyQt6.QtGui import QIcon, QMouseEvent, QColor, QPainter
 import theme
 import animations
+from bsod import setup_crash_handler
+
+class SigeonDisplayOverlay(QWidget):
+    """Click-through overlay for controlling screen brightness and night light"""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.brightness = 100
+        self.night_light = False
+        self.setGeometry(parent.rect() if parent else QRect())
+        
+    def set_brightness(self, value):
+        self.brightness = value
+        self.update()
+        
+    def set_night_light(self, enabled):
+        self.night_light = enabled
+        self.update()
+        
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        
+        # 1. Brightness dimming: 0 (brightness=100) to 0.75 opacity (brightness=0)
+        dim_opacity = int((100 - self.brightness) / 100.0 * 180)
+        if dim_opacity > 0:
+            painter.fillRect(self.rect(), QColor(0, 0, 0, dim_opacity))
+            
+        # 2. Night Light warm filter
+        if self.night_light:
+            painter.fillRect(self.rect(), QColor(255, 128, 0, 35))
 
 # Import components
 from desktop import SigeonDesktop
@@ -29,6 +60,12 @@ class SigeonMainWindow(QMainWindow):
         
         self.init_ui()
         self.installEventFilter(self) # For click-away start menu hide
+        
+        # Instantiate display overlay
+        self.display_overlay = SigeonDisplayOverlay(self)
+        self.display_overlay.setGeometry(self.rect())
+        self.display_overlay.show()
+        self.display_overlay.raise_()
         
         # --- MODIFICA PER VERO FULLSCREEN BORDERLESS ---
         # Rimuove le decorazioni della finestra a livello di Window Manager (niente bordi o barre del titolo)
@@ -116,6 +153,22 @@ class SigeonMainWindow(QMainWindow):
         self.fs.set_current_user(username)
         # Update username in Start Menu bottom bar
         self.start_menu.menu.prof_name.setText(username)
+
+        # Load saved theme preference for this user
+        try:
+            import json
+            user_prefs_path = os.path.join(
+                os.path.dirname(__file__), "users", username, "theme.json"
+            )
+            if os.path.exists(user_prefs_path):
+                with open(user_prefs_path, 'r') as tf:
+                    prefs = json.load(tf)
+                    theme.set_dark_mode(prefs.get("dark_mode", False))
+            else:
+                theme.set_dark_mode(False)
+            QApplication.instance().setStyleSheet(theme.get_stylesheet())
+        except Exception:
+            pass
         
         # Reset desktop for this user
         self.desktop.load_desktop_icons()
@@ -130,11 +183,22 @@ class SigeonMainWindow(QMainWindow):
             
         animations.fade_out(self.login_screen, duration=450, callback=show_desktop)
 
+
     def on_logout_requested(self):
         self.hide_start_menu(animate=False)
         self.login_screen.reset()
         self.stacked_widget.setCurrentIndex(2)
         self.login_screen.start_appear_animation()
+    
+    def reboot(self):
+        self.hide_start_menu(animate=False)
+        for app_id in list(self.desktop.open_windows.keys()):
+            try:
+                self.desktop.open_windows[app_id].close_window()
+            except Exception:
+                pass
+        self.stacked_widget.setCurrentIndex(0)
+        self.boot_screen.start_boot()
     
     def toggle_start_menu(self):
         if getattr(self, "start_menu_visible_target", False):
@@ -236,6 +300,12 @@ class SigeonMainWindow(QMainWindow):
                     
         return super().eventFilter(obj, event)
 
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, 'display_overlay') and self.display_overlay:
+            self.display_overlay.setGeometry(self.rect())
+            self.display_overlay.raise_()
+
 # Helper wrapper to make start menu overlay nice and clean
 class QStartMenuWrapper(QWidget):
     def __init__(self, parent, main_window):
@@ -253,6 +323,9 @@ class QStartMenuWrapper(QWidget):
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
+    
+    # Setup crash handler for BSOD (must be after QApplication creation)
+    setup_crash_handler(app)
     
     # Set app style
     app.setStyle("Fusion")

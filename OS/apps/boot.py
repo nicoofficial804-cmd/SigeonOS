@@ -96,3 +96,16 @@ class SigeonBootScreen(QWidget):
     def on_boot_timeout(self):
         # Fade out warning message, then emit boot_finished
         animations.fade_out(self.warning_label, duration=500, callback=self.boot_finished.emit)
+
+    def start_boot(self):
+        self.show()
+        if hasattr(self, 'video_player'):
+            self.video_player.setPosition(0)
+            self.video_player.play()
+            if hasattr(self, 'audio_player') and self.audio_player:
+                self.audio_player.setPosition(0)
+                self.audio_player.play()
+        elif hasattr(self, 'warning_label'):
+            self.warning_label.show()
+            self.warning_label.setGraphicsEffect(None)
+            self.error_timer.start(3000)
